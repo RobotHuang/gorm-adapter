@@ -15,6 +15,7 @@
 package gormadapter
 
 import (
+	"context"
 	"errors"
 	"runtime"
 	"strings"
@@ -33,15 +34,17 @@ const (
 	defaultTableName    = "casbin_rule"
 )
 
+type customTableKey struct{}
+
 type CasbinRule struct {
 	ID    uint   `gorm:"primaryKey;autoIncrement"`
-	PType string `gorm:"size:40;uniqueIndex:unique_index"`
-	V0    string `gorm:"size:40;uniqueIndex:unique_index"`
-	V1    string `gorm:"size:40;uniqueIndex:unique_index"`
-	V2    string `gorm:"size:40;uniqueIndex:unique_index"`
-	V3    string `gorm:"size:40;uniqueIndex:unique_index"`
-	V4    string `gorm:"size:40;uniqueIndex:unique_index"`
-	V5    string `gorm:"size:40;uniqueIndex:unique_index"`
+	Ptype string `gorm:"size:100;uniqueIndex:unique_index"`
+	V0    string `gorm:"size:100;uniqueIndex:unique_index"`
+	V1    string `gorm:"size:100;uniqueIndex:unique_index"`
+	V2    string `gorm:"size:100;uniqueIndex:unique_index"`
+	V3    string `gorm:"size:100;uniqueIndex:unique_index"`
+	V4    string `gorm:"size:100;uniqueIndex:unique_index"`
+	V5    string `gorm:"size:100;uniqueIndex:unique_index"`
 }
 
 type Filter struct {
@@ -164,7 +167,7 @@ func NewAdapterByDBUseTableName(db *gorm.DB, prefix string, tableName string) (*
 		tableName:   tableName,
 	}
 
-	a.db = db.Scopes(a.casbinRuleTable()).Session(&gorm.Session{})
+	a.db = db.Scopes(a.casbinRuleTable()).Session(&gorm.Session{Context: db.Statement.Context})
 	err := a.createTable()
 	if err != nil {
 		return nil, err
@@ -173,9 +176,31 @@ func NewAdapterByDBUseTableName(db *gorm.DB, prefix string, tableName string) (*
 	return a, nil
 }
 
+// NewFilteredAdapter is the constructor for FilteredAdapter.
+// Casbin will not automatically call LoadPolicy() for a filtered adapter.
+func NewFilteredAdapter(driverName string, dataSourceName string, params ...interface{}) (*Adapter, error) {
+	adapter, err := NewAdapter(driverName, dataSourceName, params...)
+	if err != nil {
+		return nil, err
+	}
+	adapter.isFiltered = true
+	return adapter, err
+}
+
 // NewAdapterByDB creates gorm-adapter by an existing Gorm instance
 func NewAdapterByDB(db *gorm.DB) (*Adapter, error) {
 	return NewAdapterByDBUseTableName(db, "", defaultTableName)
+}
+
+func NewAdapterByDBWithCustomTable(db *gorm.DB, t interface{}) (*Adapter, error) {
+	ctx := db.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ctx = context.WithValue(ctx, customTableKey{}, t)
+
+	return NewAdapterByDBUseTableName(db.WithContext(ctx), "", defaultTableName)
 }
 
 func openDBConnection(driverName, dataSourceName string) (*gorm.DB, error) {
@@ -269,15 +294,25 @@ func (a *Adapter) casbinRuleTable() func(db *gorm.DB) *gorm.DB {
 }
 
 func (a *Adapter) createTable() error {
-	return a.db.AutoMigrate(a.getTableInstance())
+	t := a.db.Statement.Context.Value(customTableKey{})
+	if t == nil {
+		return a.db.AutoMigrate(a.getTableInstance())
+	}
+
+	return a.db.AutoMigrate(t)
 }
 
 func (a *Adapter) dropTable() error {
-	return a.db.Migrator().DropTable(a.getTableInstance())
+	t := a.db.Statement.Context.Value(customTableKey{})
+	if t == nil {
+		return a.db.Migrator().DropTable(a.getTableInstance())
+	}
+
+	return a.db.Migrator().DropTable(t)
 }
 
 func loadPolicyLine(line CasbinRule, model model.Model) {
-	var p = []string{line.PType,
+	var p = []string{line.Ptype,
 		line.V0, line.V1, line.V2, line.V3, line.V4, line.V5}
 
 	var lineText string
@@ -342,7 +377,7 @@ func (a *Adapter) IsFiltered() bool {
 func (a *Adapter) filterQuery(db *gorm.DB, filter Filter) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
 		if len(filter.PType) > 0 {
-			db = db.Where("p_type in (?)", filter.PType)
+			db = db.Where("ptype in (?)", filter.PType)
 		}
 		if len(filter.V0) > 0 {
 			db = db.Where("v0 in (?)", filter.V0)
@@ -369,7 +404,7 @@ func (a *Adapter) filterQuery(db *gorm.DB, filter Filter) func(db *gorm.DB) *gor
 func (a *Adapter) savePolicyLine(ptype string, rule []string) CasbinRule {
 	line := a.getTableInstance()
 
-	line.PType = ptype
+	line.Ptype = ptype
 	if len(rule) > 0 {
 		line.V0 = rule[0]
 	}
@@ -470,7 +505,7 @@ func (a *Adapter) RemovePolicies(sec string, ptype string, rules [][]string) err
 func (a *Adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int, fieldValues ...string) error {
 	line := a.getTableInstance()
 
-	line.PType = ptype
+	line.Ptype = ptype
 	if fieldIndex <= 0 && 0 < fieldIndex+len(fieldValues) {
 		line.V0 = fieldValues[0-fieldIndex]
 	}
@@ -494,9 +529,9 @@ func (a *Adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 }
 
 func (a *Adapter) rawDelete(db *gorm.DB, line CasbinRule) error {
-	queryArgs := []interface{}{line.PType}
+	queryArgs := []interface{}{line.Ptype}
 
-	queryStr := "p_type = ?"
+	queryStr := "ptype = ?"
 	if line.V0 != "" {
 		queryStr += " and v0 = ?"
 		queryArgs = append(queryArgs, line.V0)
@@ -523,5 +558,45 @@ func (a *Adapter) rawDelete(db *gorm.DB, line CasbinRule) error {
 	}
 	args := append([]interface{}{queryStr}, queryArgs...)
 	err := db.Delete(a.getTableInstance(), args...).Error
+	return err
+}
+
+func appendWhere(line CasbinRule) (string, []interface{}) {
+	queryArgs := []interface{}{line.Ptype}
+
+	queryStr := "ptype = ?"
+	if line.V0 != "" {
+		queryStr += " and v0 = ?"
+		queryArgs = append(queryArgs, line.V0)
+	}
+	if line.V1 != "" {
+		queryStr += " and v1 = ?"
+		queryArgs = append(queryArgs, line.V1)
+	}
+	if line.V2 != "" {
+		queryStr += " and v2 = ?"
+		queryArgs = append(queryArgs, line.V2)
+	}
+	if line.V3 != "" {
+		queryStr += " and v3 = ?"
+		queryArgs = append(queryArgs, line.V3)
+	}
+	if line.V4 != "" {
+		queryStr += " and v4 = ?"
+		queryArgs = append(queryArgs, line.V4)
+	}
+	if line.V5 != "" {
+		queryStr += " and v5 = ?"
+		queryArgs = append(queryArgs, line.V5)
+	}
+	return queryStr, queryArgs
+}
+
+// UpdatePolicy updates a new policy rule to DB.
+func (a *Adapter) UpdatePolicy(sec string, ptype string, oldRule, newPolicy []string) error {
+	oldLine := a.savePolicyLine(ptype, oldRule)
+	queryStr, queryArgs := appendWhere(oldLine)
+	newLine := a.savePolicyLine(ptype, newPolicy)
+	err := a.db.Where(queryStr, queryArgs...).Updates(newLine).Error
 	return err
 }

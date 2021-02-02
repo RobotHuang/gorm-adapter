@@ -2,7 +2,7 @@ Gorm Adapter
 ====
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/casbin/gorm-adapter)](https://goreportcard.com/report/github.com/casbin/gorm-adapter)
-[![Build Status](https://travis-ci.org/casbin/gorm-adapter.svg?branch=master)](https://travis-ci.org/casbin/gorm-adapter)
+[![Build Status](https://travis-ci.com/casbin/gorm-adapter.svg?branch=master)](https://travis-ci.com/casbin/gorm-adapter)
 [![Coverage Status](https://coveralls.io/repos/github/casbin/gorm-adapter/badge.svg?branch=master)](https://coveralls.io/github/casbin/gorm-adapter?branch=master)
 [![Godoc](https://godoc.org/github.com/casbin/gorm-adapter?status.svg)](https://godoc.org/github.com/casbin/gorm-adapter)
 [![Release](https://img.shields.io/github/release/casbin/gorm-adapter.svg)](https://github.com/casbin/gorm-adapter/releases/latest)
@@ -48,6 +48,52 @@ func main() {
 	// If it doesn't exist, the adapter will create it automatically.
 	// a := gormadapter.NewAdapter("mysql", "mysql_username:mysql_password@tcp(127.0.0.1:3306)/abc", true)
 
+	// Load the policy from DB.
+	e.LoadPolicy()
+	
+	// Check the permission.
+	e.Enforce("alice", "data1", "read")
+	
+	// Modify the policy.
+	// e.AddPolicy(...)
+	// e.RemovePolicy(...)
+	
+	// Save the policy back to DB.
+	e.SavePolicy()
+}
+```
+
+## Customize table columns example
+You can change the gorm struct tags, but the table structure must stay the same.
+```go
+package main
+
+import (
+	"github.com/casbin/casbin/v2"
+	gormadapter "github.com/casbin/gorm-adapter/v3"
+	"gorm.io/gorm"
+)
+
+func main() {
+	// Increase the column size to 512.
+	type CasbinRule struct {
+		ID    uint   `gorm:"primaryKey;autoIncrement"`
+		Ptype string `gorm:"size:512;uniqueIndex:unique_index"`
+		V0    string `gorm:"size:512;uniqueIndex:unique_index"`
+		V1    string `gorm:"size:512;uniqueIndex:unique_index"`
+		V2    string `gorm:"size:512;uniqueIndex:unique_index"`
+		V3    string `gorm:"size:512;uniqueIndex:unique_index"`
+		V4    string `gorm:"size:512;uniqueIndex:unique_index"`
+		V5    string `gorm:"size:512;uniqueIndex:unique_index"`
+	}
+
+	db, _ := gorm.Open(...)
+
+	// Initialize a Gorm adapter and use it in a Casbin enforcer:
+	// The adapter will use an existing gorm.DB instnace.
+	a, _ := gormadapter.NewAdapterByDBWithCustomTable(db, &CasbinRule{}) 
+	e, _ := casbin.NewEnforcer("examples/rbac_model.conf", a)
+	
 	// Load the policy from DB.
 	e.LoadPolicy()
 	
