@@ -17,6 +17,7 @@ package gormadapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/jackc/pgconn"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
 	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 )
@@ -38,13 +40,17 @@ type customTableKey struct{}
 
 type CasbinRule struct {
 	ID    uint   `gorm:"primaryKey;autoIncrement"`
-	Ptype string `gorm:"size:100;uniqueIndex:unique_index"`
-	V0    string `gorm:"size:100;uniqueIndex:unique_index"`
-	V1    string `gorm:"size:100;uniqueIndex:unique_index"`
-	V2    string `gorm:"size:100;uniqueIndex:unique_index"`
-	V3    string `gorm:"size:100;uniqueIndex:unique_index"`
-	V4    string `gorm:"size:100;uniqueIndex:unique_index"`
-	V5    string `gorm:"size:100;uniqueIndex:unique_index"`
+	Ptype string `gorm:"size:100"`
+	V0    string `gorm:"size:100"`
+	V1    string `gorm:"size:100"`
+	V2    string `gorm:"size:100"`
+	V3    string `gorm:"size:100"`
+	V4    string `gorm:"size:100"`
+	V5    string `gorm:"size:100"`
+}
+
+func (CasbinRule) TableName() string {
+	return "casbin_rule"
 }
 
 type Filter struct {
@@ -210,10 +216,10 @@ func openDBConnection(driverName, dataSourceName string) (*gorm.DB, error) {
 		db, err = gorm.Open(postgres.Open(dataSourceName), &gorm.Config{})
 	} else if driverName == "mysql" {
 		db, err = gorm.Open(mysql.Open(dataSourceName), &gorm.Config{})
-		//} else if driverName == "sqlite3" {
-		//	db, err = gorm.Open(sqlite.Open(dataSourceName), &gorm.Config{})
 	} else if driverName == "sqlserver" {
 		db, err = gorm.Open(sqlserver.Open(dataSourceName), &gorm.Config{})
+	} else if driverName == "sqlite3" {
+		db, err = gorm.Open(sqlite.Open(dataSourceName), &gorm.Config{})
 	} else {
 		return nil, errors.New("database dialect is not supported")
 	}
@@ -284,22 +290,40 @@ func (a *Adapter) getTableInstance() *CasbinRule {
 	return &CasbinRule{}
 }
 
+func (a *Adapter) getFullTableName() string {
+	if a.tablePrefix != "" {
+		return a.tablePrefix + "_" + a.tableName
+	}
+	return a.tableName
+}
+
 func (a *Adapter) casbinRuleTable() func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		if a.tablePrefix != "" {
-			return db.Table(a.tablePrefix + "_" + a.tableName)
-		}
-		return db.Table(a.tableName)
+		tableName := a.getFullTableName()
+		return db.Table(tableName)
 	}
 }
 
 func (a *Adapter) createTable() error {
 	t := a.db.Statement.Context.Value(customTableKey{})
+
 	if t == nil {
-		return a.db.AutoMigrate(a.getTableInstance())
+		t = a.getTableInstance()
 	}
 
-	return a.db.AutoMigrate(t)
+	if err := a.db.AutoMigrate(t); err != nil {
+		return err
+	}
+
+	tableName := a.getFullTableName()
+	index := "idx_" + tableName
+	hasIndex := a.db.Migrator().HasIndex(t, index)
+	if !hasIndex {
+		if err := a.db.Exec(fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (ptype,v0,v1,v2,v3,v4,v5)", index, tableName)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Adapter) dropTable() error {
